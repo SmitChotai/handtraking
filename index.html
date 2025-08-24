@@ -1,116 +1,219 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Snowflake Hand Tracking ❄️✨</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fingertip Snowflakes ❄️ (MediaPipe Hands, Canvas)</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: black;
+    :root { --ui: rgba(0,0,0,.5); --txt: #eaf2ff; }
+    html, body { margin: 0; height: 100%; background:#000; overflow: hidden; }
+    #wrap { position: fixed; inset: 0; }
+    canvas { position: absolute; inset: 0; display: block; }
+    video { display: none; }
+    /* Tiny UI */
+    #hud {
+      position: fixed; right: 12px; top: 12px;
+      background: var(--ui); color: var(--txt);
+      font: 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      padding: 10px 12px; border-radius: 10px; backdrop-filter: blur(6px);
+      user-select: none;
     }
-    canvas {
-      display: block;
-    }
-    video {
-      display: none;
-    }
+    #hud label { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+    #hud input[type="range"] { width: 120px; }
+    #hud .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+    a#gh { color: var(--txt); opacity:.8; text-decoration: none; }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
-  <canvas id="canvas"></canvas>
+  <div id="wrap">
+    <canvas id="canvas"></canvas>
+    <video id="video" playsinline autoplay></video>
+  </div>
 
-  <!-- Mediapipe Hands -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+  <!-- Minimal HUD (optional) -->
+  <div id="hud">
+    <div class="row"><strong>Fingertip Snowflakes</strong></div>
+    <label><span>Density</span><input id="density" type="range" min="1" max="8" step="1" value="3"></label>
+    <label><span>Glow</span><input id="glow" type="range" min="0" max="30" step="1" value="12"></label>
+    <label><span>Size</span><input id="size" type="range" min="4" max="18" step="1" value="10"></label>
+    <label><input id="mirror" type="checkbox" checked> Mirror</label>
+  </div>
+
+  <!-- MediaPipe Hands (Web) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <script>
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
+    // Elements
+    const video  = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx    = canvas.getContext('2d');
 
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    // HUD controls
+    const ui = {
+      density: document.getElementById('density'),
+      glow:    document.getElementById('glow'),
+      size:    document.getElementById('size'),
+      mirror:  document.getElementById('mirror'),
+    };
 
-    let snowflakes = [];
+    // Resize canvas to fill window
+    function fitCanvas() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', fitCanvas);
+    fitCanvas();
 
+    // ------- Snowflake particle -------
     class Snowflake {
-      constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.size = Math.random() * 6 + 4;
-        this.speedY = Math.random() * 1 + 0.5;
-        this.opacity = Math.random() * 0.5 + 0.5;
-        this.angle = Math.random() * Math.PI * 2;
-        this.spin = (Math.random() - 0.5) * 0.02;
+      constructor(x, y, baseSize, glowPx) {
+        // start near fingertip with slight spread
+        this.x = x + (Math.random()*16 - 8);
+        this.y = y + (Math.random()*16 - 8);
+        this.r = (baseSize * 0.6) + Math.random() * (baseSize * 0.6);
+        this.vy = 0.6 + Math.random()*1.6;         // gravity
+        this.vx = (Math.random()-0.5) * 0.6;       // wind
+        this.spin = (Math.random()-0.5) * 0.06;    // rotation speed
+        this.angle = Math.random() * Math.PI*2;    // rotation
+        this.life = 120 + Math.random()*80;        // frames
+        this.alpha = 0.9;
+        this.glow = glowPx|0;
       }
-      update() {
-        this.y += this.speedY;
+      update(w,h) {
+        this.x += this.vx + Math.sin(this.angle*2) * 0.1;
+        this.y += this.vy;
         this.angle += this.spin;
-        if (this.y > canvas.height) this.y = -10;
+        this.life -= 1;
+        if (this.y > h + 40) this.life = 0; // offscreen
+        if (this.life < 40) this.alpha = Math.max(0, this.alpha - 0.02);
+        return this.life > 0;
       }
-      draw() {
+      draw(ctx) {
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
-        const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, this.size);
-        gradient.addColorStop(0, "rgba(255,255,255," + this.opacity + ")");
-        gradient.addColorStop(1, "rgba(200,200,255,0)");
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-        ctx.fill();
+
+        // soft glow
+        ctx.shadowColor = `rgba(200,220,255,0.9)`;
+        ctx.shadowBlur  = this.glow;
+
+        // draw a simple 6-arm snowflake with branches
+        ctx.lineWidth = Math.max(1, this.r * 0.12);
+        ctx.strokeStyle = `rgba(255,255,255,${this.alpha})`;
+
+        // main arms
+        for (let a=0; a<6; a++) {
+          const t = a * Math.PI/3;
+          const len = this.r;
+          const bx = Math.cos(t) * len;
+          const by = Math.sin(t) * len;
+
+          ctx.beginPath();
+          ctx.moveTo(0,0);
+          ctx.lineTo(bx,by);
+          ctx.stroke();
+
+          // little side branches
+          const b1x = Math.cos(t + 0.35) * (len*0.55);
+          const b1y = Math.sin(t + 0.35) * (len*0.55);
+          const b2x = Math.cos(t - 0.35) * (len*0.55);
+          const b2y = Math.sin(t - 0.35) * (len*0.55);
+
+          ctx.beginPath();
+          ctx.moveTo(bx*0.55, by*0.55);
+          ctx.lineTo(b1x, b1y);
+          ctx.moveTo(bx*0.55, by*0.55);
+          ctx.lineTo(b2x, b2y);
+          ctx.stroke();
+        }
+
+        // tiny core highlight
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = `rgba(255,255,255,${Math.min(1,this.alpha+0.1)})`;
+        ctx.beginPath(); ctx.arc(0,0, this.r*0.15, 0, Math.PI*2); ctx.fill();
+
         ctx.restore();
       }
     }
 
-    function animate() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      snowflakes.forEach((flake, i) => {
-        flake.update();
-        flake.draw();
-      });
-      requestAnimationFrame(animate);
+    // Particle system
+    const flakes = [];
+    function spawnAt(x,y, count, baseSize, glowPx) {
+      for (let i=0;i<count;i++) flakes.push(new Snowflake(x,y,baseSize,glowPx));
     }
 
-    // Setup Mediapipe Hands
+    // ------- MediaPipe Hands setup -------
     const hands = new Hands({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
     });
-
     hands.setOptions({
       maxNumHands: 2,
       modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
     });
 
+    // draw loop variables
+    let lastFrameImg = null;
+
     hands.onResults((results) => {
-      if (results.multiHandLandmarks) {
-        for (const landmarks of results.multiHandLandmarks) {
-          // fingertips = 8 (index), 12 (middle), 16 (ring), 20 (pinky)
-          [8, 12, 16, 20].forEach(f => {
-            let x = landmarks[f].x * canvas.width;
-            let y = landmarks[f].y * canvas.height;
-            snowflakes.push(new Snowflake(x, y));
-          });
-        }
+      lastFrameImg = results.image; // keep the latest frame
+      if (!results.multiHandLandmarks) return;
+
+      // For each detected hand, spawn flakes at fingertips
+      const W = canvas.width, H = canvas.height;
+      for (const lm of results.multiHandLandmarks) {
+        // fingertips indices: 4 (thumb), 8 (index), 12 (middle), 16 (ring), 20 (pinky)
+        [4,8,12,16,20].forEach(i => {
+          const x = lm[i].x * W;
+          const y = lm[i].y * H;
+          spawnAt(x, y, Number(ui.density.value), Number(ui.size.value), Number(ui.glow.value));
+        });
       }
     });
 
-    // Camera setup
+    // Start camera
     const camera = new Camera(video, {
-      onFrame: async () => {
-        await hands.send({image: video});
-      },
-      width: 640,
-      height: 480
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 640, height: 480
     });
     camera.start();
 
-    animate();
+    // ------- Render loop -------
+    function draw() {
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0,0,W,H);
+
+      // draw live video as background (optionally mirrored)
+      if (lastFrameImg) {
+        if (ui.mirror.checked) {
+          ctx.save();
+          ctx.scale(-1,1);
+          ctx.drawImage(lastFrameImg, -W, 0, W, H);
+          ctx.restore();
+        } else {
+          ctx.drawImage(lastFrameImg, 0, 0, W, H);
+        }
+      }
+
+      // update + draw flakes
+      for (let i=flakes.length-1; i>=0; i--) {
+        const f = flakes[i];
+        if (!f.update(W,H)) { flakes.splice(i,1); continue; }
+        f.draw(ctx);
+      }
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    // ------- Helpful tips for camera issues -------
+    // If you still see black:
+    // 1) Make sure the page is served via HTTPS (GitHub Pages is).
+    // 2) Click the camera icon in the browser’s address bar → Allow camera.
+    // 3) On iOS Safari, ensure Settings > Safari > Camera is allowed.
+    // 4) Some mobile devices need a tap first; try reloading and granting permission.
   </script>
 </body>
 </html>
