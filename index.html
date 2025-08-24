@@ -165,7 +165,7 @@
       const W = canvas.width, H = canvas.height;
       for (const lm of results.multiHandLandmarks) {
         // fingertips indices: 4 (thumb), 8 (index), 12 (middle), 16 (ring), 20 (pinky)
-        [4,8,12,16,20].forEach(i => {
+        [8].forEach(i => {
           const x = lm[i].x * W;
           const y = lm[i].y * H;
           spawnAt(x, y, Number(ui.density.value), Number(ui.size.value), Number(ui.glow.value));
@@ -217,3 +217,4 @@
   </script>
 </body>
 </html>
+
